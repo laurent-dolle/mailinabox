@@ -22,8 +22,8 @@ apt_install \
 phpenmod -v php imap
 
 # Copy Z-Push into place.
-VERSION=2.5.1
-TARGETHASH=4fa55863a429b0033497ae477aca4c8699b8f332
+VERSION=2.6.2
+TARGETHASH=f0e8091a8030e5b851f5ba1f9f0e1a05b8762d80
 needs_update=0 #NODOC
 if [ ! -f /usr/local/lib/z-push/version ]; then
 	needs_update=1 #NODOC
@@ -33,12 +33,12 @@ elif [[ $VERSION != `cat /usr/local/lib/z-push/version` ]]; then
 fi
 if [ $needs_update == 1 ]; then
 	# Download
-	wget_verify "https://stash.z-hub.io/rest/api/latest/projects/ZP/repos/z-push/archive?at=refs%2Ftags%2F$VERSION&format=zip" $TARGETHASH /tmp/z-push.zip
+	wget_verify "https://github.com/Z-Hub/Z-Push/archive/refs/tags/$VERSION.zip" $TARGETHASH /tmp/z-push.zip
 
 	# Extract into place.
 	rm -rf /usr/local/lib/z-push /tmp/z-push
 	unzip -q /tmp/z-push.zip -d /tmp/z-push
-	mv /tmp/z-push/src /usr/local/lib/z-push
+	mv /tmp/z-push/*/src /usr/local/lib/z-push
 	rm -rf /tmp/z-push.zip /tmp/z-push
 
 	rm -f /usr/sbin/z-push-{admin,top}
