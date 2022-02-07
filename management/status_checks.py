@@ -678,9 +678,21 @@ def query_dns(qname, rtype, nxdomain='[Not Set]', at=None):
 	# Set a timeout so that a non-responsive server doesn't hold us back.
 	resolver.timeout = 5
 
+	#Do the query
+	try:
+		# dnspython >= 2
+		from dns.resolver import resolve as _resolve
+		#from resolver import resolve as _resolve
+	except ImportError:
+		# dnspython 1.X
+		from dns.resolver import query as _resolve
+		#from resolver import query as _resolve
+
 	# Do the query.
 	try:
-		response = resolver.query(qname, rtype)
+		response = _resolve(qname, rtype)
+		#response = resolver.query(qname, rtype)
+		#response = dns.resolver.Resolver.resolve(qname, rtype)
 	except (dns.resolver.NoNameservers, dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
 		# Host did not have an answer for this query; not sure what the
 		# difference is between the two exceptions.
