@@ -9,17 +9,59 @@ source /etc/mailinabox.conf # load global vars
 
 echo "Installing Nextcloud (contacts/calendar)..."
 
+# Nextcloud core and app (plugin) versions to install.
+# With each version we store a hash to ensure we install what we expect.
+
+# Nextcloud core
+# --------------
+# * See https://nextcloud.com/changelog for the latest version.
+# * Check https://docs.nextcloud.com/server/latest/admin_manual/installation/system_requirements.html
+#   for whether it supports the version of PHP available on this machine.
+# * Since Nextcloud only supports upgrades from consecutive major versions,
+#   we automatically install intermediate versions as needed.
+# * The hash is the SHA1 hash of the ZIP package, which you can find by just running this script and
+#   copying it from the error message when it doesn't match what is below.
+nextcloud_ver=22.2.3
+nextcloud_hash=58d2d897ba22a057aa03d29c762c5306211fefd2
+
+# Nextcloud apps
+# --------------
+# * Find the most recent tag that is compatible with the Nextcloud version above by
+#   consulting the <dependencies>...<nextcloud> node at:
+#   https://github.com/nextcloud-releases/contacts/blob/master/appinfo/info.xml
+#   https://github.com/nextcloud-releases/calendar/blob/master/appinfo/info.xml
+#   https://github.com/nextcloud/user_external/blob/master/appinfo/info.xml
+# * The hash is the SHA1 hash of the ZIP package, which you can find by just running this script and
+#   copying it from the error message when it doesn't match what is below.
+contacts_ver=4.0.7
+contacts_hash=8ab31d205408e4f12067d8a4daa3595d46b513e3
+calendar_ver=3.0.5
+calendar_hash=bbbb0f117fcdd2dbd2daa1d456b43dc534cec72f
+user_external_ver=2.1.0
+user_external_hash=6e5afe7f36f398f864bfdce9cad72200e70322aa
+
+# Clear prior packages and install dependencies from apt.
+
 apt-get purge -qq -y owncloud* # we used to use the package manager
 
-apt_install php php-fpm \
+apt_install memcached php php-fpm \
 	php-cli php-sqlite3 php-gd php-imap php-curl php-pear curl \
 	php-dev php-gd php-xml php-mbstring php-zip php-apcu php-json \
-	php-intl php-imagick
+	php-intl php-imagick php-gmp php-bcmath
+
+# Modification du fichier apcu_ini
+echo apc.enable_cli=1 >> /etc/php/7.4/mods-available/apcu.ini
 
 InstallNextcloud() {
 
 	version=$1
 	hash=$2
+	version_contacts=$3
+	hash_contacts=$4
+	version_calendar=$5
+	hash_calendar=$6
+	version_user_external=${7:-}
+	hash_user_external=${8:-}
 
 	echo
 	echo "Upgrading to Nextcloud version $version"
@@ -40,18 +82,18 @@ InstallNextcloud() {
 	# their github repositories.
 	mkdir -p /usr/local/lib/owncloud/apps
 
-	wget_verify https://github.com/nextcloud/contacts/releases/download/v3.3.0/contacts.tar.gz e55d0357c6785d3b1f3b5f21780cb6d41d32443a /tmp/contacts.tgz
+	wget_verify https://github.com/nextcloud-releases/contacts/releases/download/v$version_contacts/contacts-v$version_contacts.tar.gz $hash_contacts /tmp/contacts.tgz
 	tar xf /tmp/contacts.tgz -C /usr/local/lib/owncloud/apps/
 	rm /tmp/contacts.tgz
 
-	wget_verify https://github.com/nextcloud/calendar/releases/download/v2.0.3/calendar.tar.gz 9d9717b29337613b72c74e9914c69b74b346c466 /tmp/calendar.tgz
+	wget_verify https://github.com/nextcloud-releases/calendar/releases/download/v$version_calendar/calendar-v$version_calendar.tar.gz $hash_calendar /tmp/calendar.tgz
 	tar xf /tmp/calendar.tgz -C /usr/local/lib/owncloud/apps/
 	rm /tmp/calendar.tgz
 
 	# Starting with Nextcloud 15, the app user_external is no longer included in Nextcloud core,
 	# we will install from their github repository.
-	if [[ $version =~ ^1[5678] ]]; then
-		wget_verify https://github.com/nextcloud/user_external/releases/download/v0.9.1/user_external-0.9.1.tar.gz 947c953803654520064af2c15f0f5c2a2f1ed6b7 /tmp/user_external.tgz
+	if [ -n "$version_user_external" ]; then
+		wget_verify https://github.com/nextcloud/user_external/releases/download/v$version_user_external/user_external-$version_user_external.tar.gz $hash_user_external /tmp/user_external.tgz
 		tar -xf /tmp/user_external.tgz -C /usr/local/lib/owncloud/apps/
 		rm /tmp/user_external.tgz
 	fi
@@ -90,75 +132,34 @@ InstallNextcloud() {
 	fi
 }
 
-# Nextcloud Version to install. Checks are done down below to step through intermediate versions.
-nextcloud_ver=18.0.3
-nextcloud_hash=d37d3f44760328a439954dd79d345ff58a03af7c
-
 # Current Nextcloud Version, #1623
 # Checking /usr/local/lib/owncloud/version.php shows version of the Nextcloud application, not the DB
 # $STORAGE_ROOT/owncloud is kept together even during a backup.  It is better to rely on config.php than
 # version.php since the restore procedure can leave the system in a state where you have a newer Nextcloud
 # application version than the database.
 
-# If config.php exists, get version number, otherwise CURRENT_NEXTCLOUD_VER is empty.
-if [ -f "$STORAGE_ROOT/owncloud/config.php" ]; then
-	CURRENT_NEXTCLOUD_VER=$(php -r "include(\"$STORAGE_ROOT/owncloud/config.php\"); echo(\$CONFIG['version']);")
-else
-	CURRENT_NEXTCLOUD_VER=""
-fi
-
 # If the Nextcloud directory is missing (never been installed before, or the nextcloud version to be installed is different
 # from the version currently installed, do the install/upgrade
-if [ ! -d /usr/local/lib/owncloud/ ] || [[ ! ${CURRENT_NEXTCLOUD_VER} =~ ^$nextcloud_ver ]]; then
 
-	# Stop php-fpm if running. If they are not running (which happens on a previously failed install), dont bail.
-	service php7.4-fpm stop &> /dev/null || /bin/true
+# Stop php-fpm if running. If they are not running (which happens on a previously failed install), dont bail.
+service php7.4-fpm stop &> /dev/null || /bin/true
 
-	# Backup the existing ownCloud/Nextcloud.
-	# Create a backup directory to store the current installation and database to
-	BACKUP_DIRECTORY=$STORAGE_ROOT/owncloud-backup/`date +"%Y-%m-%d-%T"`
-	mkdir -p "$BACKUP_DIRECTORY"
-	if [ -d /usr/local/lib/owncloud/ ]; then
-		echo "Upgrading Nextcloud --- backing up existing installation, configuration, and database to directory to $BACKUP_DIRECTORY..."
-		cp -r /usr/local/lib/owncloud "$BACKUP_DIRECTORY/owncloud-install"
-	fi
-	if [ -e $STORAGE_ROOT/owncloud/owncloud.db ]; then
-		cp $STORAGE_ROOT/owncloud/owncloud.db $BACKUP_DIRECTORY
-	fi
-	if [ -e $STORAGE_ROOT/owncloud/config.php ]; then
-		cp $STORAGE_ROOT/owncloud/config.php $BACKUP_DIRECTORY
-	fi
-
-	# If ownCloud or Nextcloud was previously installed....
-	if [ ! -z ${CURRENT_NEXTCLOUD_VER} ]; then
-		# Database migrations from ownCloud are no longer possible because ownCloud cannot be run under
-		# PHP 7.
-		if [[ ${CURRENT_NEXTCLOUD_VER} =~ ^[89] ]]; then
-			echo "Upgrades from Mail-in-a-Box prior to v0.28 (dated July 30, 2018) with Nextcloud < 13.0.6 (you have ownCloud 8 or 9) are not supported. Upgrade to Mail-in-a-Box version v0.30 first. Setup aborting."
-			exit 1
-		elif [[ ${CURRENT_NEXTCLOUD_VER} =~ ^1[012] ]]; then
-			echo "Upgrades from Mail-in-a-Box prior to v0.28 (dated July 30, 2018) with Nextcloud < 13.0.6 (you have ownCloud 10, 11 or 12) are not supported. Upgrade to Mail-in-a-Box version v0.30 first. Setup aborting."
-			exit 1
-		elif [[ ${CURRENT_NEXTCLOUD_VER} =~ ^13 ]]; then
-			# If we are running Nextcloud 13, upgrade to Nextcloud 14
-			InstallNextcloud 14.0.6 4e43a57340f04c2da306c8eea98e30040399ae5a
-			CURRENT_NEXTCLOUD_VER="14.0.6"
-		fi
-		if [[ ${CURRENT_NEXTCLOUD_VER} =~ ^14 ]]; then
-			# During the upgrade from Nextcloud 14 to 15, user_external may cause the upgrade to fail.
-			# We will disable it here before the upgrade and install it again after the upgrade.
-			hide_output sudo -u www-data php /usr/local/lib/owncloud/console.php app:disable user_external
-			InstallNextcloud 15.0.8 4129d8d4021c435f2e86876225fb7f15adf764a3
-			CURRENT_NEXTCLOUD_VER="15.0.8"
-		fi
-		if [[ ${CURRENT_NEXTCLOUD_VER} =~ ^15 ]]; then
-                        InstallNextcloud 16.0.6 0bb3098455ec89f5af77a652aad553ad40a88819
-                        CURRENT_NEXTCLOUD_VER="16.0.6"
-                fi
-	fi
-
-	InstallNextcloud $nextcloud_ver $nextcloud_hash
+# Backup the existing ownCloud/Nextcloud.
+# Create a backup directory to store the current installation and database to
+BACKUP_DIRECTORY=$STORAGE_ROOT/owncloud-backup/`date +"%Y-%m-%d-%T"`
+mkdir -p "$BACKUP_DIRECTORY"
+if [ -d /usr/local/lib/owncloud/ ]; then
+	echo "Upgrading Nextcloud --- backing up existing installation, configuration, and database to directory to $BACKUP_DIRECTORY..."
+	cp -r /usr/local/lib/owncloud "$BACKUP_DIRECTORY/owncloud-install"
 fi
+if [ -e $STORAGE_ROOT/owncloud/owncloud.db ]; then
+	cp $STORAGE_ROOT/owncloud/owncloud.db $BACKUP_DIRECTORY
+fi
+if [ -e $STORAGE_ROOT/owncloud/config.php ]; then
+	cp $STORAGE_ROOT/owncloud/config.php $BACKUP_DIRECTORY
+fi
+
+InstallNextcloud $nextcloud_ver $nextcloud_hash $contacts_ver $contacts_hash $calendar_ver $calendar_hash $user_external_ver $user_external_hash
 
 # ### Configuring Nextcloud
 
