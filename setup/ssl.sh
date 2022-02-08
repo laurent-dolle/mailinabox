@@ -10,7 +10,7 @@
 #
 #  * DNSSEC DANE TLSA records
 #  * IMAP
-#  * SMTP (opportunistic TLS for port 25 and submission on port 587)
+#  * SMTP (opportunistic TLS for port 25 and submission on ports 465/587)
 #  * HTTPS
 #
 # The certificate is created with its CN set to the PRIMARY_HOSTNAME. It is
